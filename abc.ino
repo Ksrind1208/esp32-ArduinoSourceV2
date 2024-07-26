@@ -12,6 +12,9 @@
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
+#include <BluetoothSerial.h> 
+#include <HardwareSerial.h>
+#include <TaskScheduler.h>
 #define ESP_DRD_USE_SPIFFS true
 
 #define JSON_CONFIG_FILE "/test_config.json"
@@ -22,6 +25,16 @@
 
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+//Khai báo biến
+BluetoothSerial SerialBT;
+String message = ""; 
+char incomingChar; 
+
+float temperature = 0; 
+float humidity = 0; 
+unsigned long previousMillis = 0; 
+const long interval = 15000; 
 
 bool shouldSaveConfig = false;
 WiFiManager wm;
@@ -60,6 +73,10 @@ const int led_pin = 2;
 
 bool isEthernetConnected = false;
 
+void TaskBlue(void *pvParameters);
+
+TaskHandle_t firebase_task_handle_blue;
+
 void macCharArrayToBytes(const char* str, byte* bytes) {
     for (int i = 0; i < 6; i++) {
         bytes[i] = strtoul(str, NULL, 16);
@@ -76,20 +93,6 @@ void connectEthernet() {
     macCharArrayToBytes(ETHERNET_MAC, mac);
     Ethernet.init(ETHERNET_CS_PIN);
     Ethernet.begin(mac);
-
-    // Tentativa de estabelecer conexão
-    // while(Ethernet.linkStatus() != LinkON)
-    // {
-    //   Serial.print(".");
-    //   curRetry++;
-    //   if(curRetry>max_retry){
-    //     Serial.println("Connect to ethernet fail");
-    //     curRetry=0;   
-    //     break;
-    //     delay(20);
-    //   }
-    //   delay(1000);
-    // }
     delay(1000);
     Serial.print("Ethernet IP is: ");
     Serial.println(Ethernet.localIP());
@@ -103,6 +106,17 @@ void connectEthernet() {
 
 void setup() {
     Serial.begin(115200);
+    SerialBT.begin("12325r2535353464"); 
+    Serial.println("The device started, now you can pair it with Bluetooth!"); 
+    xTaskCreatePinnedToCore(
+    TaskBlue,
+    "Blue Task",
+    4084 ,
+    NULL,
+    1,
+    &firebase_task_handle_blue,
+    ARDUINO_RUNNING_CORE
+  );
     dht.begin();
     pinMode(led_pin, OUTPUT);
     delay(2000);
@@ -120,16 +134,16 @@ void setup() {
 
 void loop() {
     // Check WiFi connection status
-    if (WiFi.status() != WL_CONNECTED && ethConnectRetry<1 ) {
+    if (WiFi.status() != WL_CONNECTED && ethConnectRetry<2 ) {
         Serial.println("WiFi disconnected, connecting to Ethernet...");
         connectEthernet();
         ethConnectRetry++;
     }
-    delay(3000);
+    delay(10);
     if (WiFi.status() == WL_CONNECTED || Ethernet.linkStatus() == LinkON) {
     client.loop();
     }
-    delay(200);
+    delay(10);
     unsigned long now = millis();
     if (now - lastMsg > 2000) {
         lastMsg = now;
@@ -242,7 +256,17 @@ void configModeCallback(WiFiManager* myWiFiManager) {
     Serial.println(myWiFiManager->getConfigPortalSSID());
     Serial.print("Config IP Address: ");
     Serial.println(WiFi.softAPIP());
-    connectEthernet();
+    if (ethConnectRetry==0){
+      Serial.println(ethConnectRetry);
+      byte* mac = new byte[6];
+      macCharArrayToBytes(ETHERNET_MAC, mac);
+      Ethernet.init(ETHERNET_CS_PIN);
+      Ethernet.begin(mac);
+      delay(1000);
+      Serial.print("Ethernet IP is: ");
+      Serial.println(Ethernet.localIP());
+      ethConnectRetry++;
+    }
 }
 
 void setupWiFi() {
@@ -253,7 +277,7 @@ void setupWiFi() {
     wm.resetSettings();
     wm.setSaveConfigCallback(saveConfigCallback);
     wm.setAPCallback(configModeCallback);
-    if (!wm.autoConnect("ESP32_Manager_AP", "1234567890")) {
+    if (!wm.autoConnect("ESP32_Manager_AP1312313321", "1234567890")) {
         Serial.println("Failed to connect and hit timeout");
         delay(3000);
         ESP.restart();
@@ -265,4 +289,90 @@ void setupWiFi() {
     if (shouldSaveConfig) {
         saveConfigFile();
     }
+}
+
+// Ble
+void processMessage(String msg) {
+  if (msg == "led_on") {
+    digitalWrite(led_pin, HIGH);
+    SerialBT.println("LED is ON");
+  } else if (msg == "led_off") {
+    digitalWrite(led_pin, LOW); 
+    SerialBT.println("LED is OFF"); 
+  } 
+  else if (msg.startsWith("dhtTemp : ")) {
+    String tempValue = msg.substring(10); 
+    temperature = tempValue.toFloat(); 
+    SerialBT.printf("Temperature received: %.2f\n", temperature);
+  } else if (msg.startsWith("dhtHum : ")) {
+    String humValue = msg.substring(9); 
+    humidity = humValue.toFloat();
+    SerialBT.printf("Humidity received: %.2f\n", humidity); 
+  } 
+  else {
+    SerialBT.print("Received unknown command: "); 
+    SerialBT.println(msg); 
+  }
+}
+
+void handleBluetoothCommunication() {
+  if (SerialBT.available()) { 
+    char incomingChar = SerialBT.read(); 
+    if (incomingChar != '\n') { 
+      message += String(incomingChar); 
+    } else { 
+      processMessage(message);
+      message = ""; 
+    }
+    Serial.write(incomingChar); 
+  }
+}
+
+void handleSerialCommunication() {
+  if (Serial.available() > 0) { 
+    String serialMessage = ""; 
+    while (Serial.available() > 0) { 
+      char command = (byte)Serial.read(); 
+      if (command == '\n') { 
+        SerialBT.print("Serial message: "); 
+        SerialBT.println(serialMessage); 
+        processMessage(serialMessage); 
+        serialMessage = ""; 
+      } else {
+        serialMessage += command; 
+      }
+      delay(1); 
+    }
+  }
+}
+
+void sendDHTValues() {
+  unsigned long currentMillis = millis(); 
+  if (currentMillis - previousMillis >= interval) { 
+    previousMillis = currentMillis; 
+
+    float temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+    
+    if (isnan(temp) || isnan(hum)) { 
+      Serial.println("Failed to read from DHT sensor!"); 
+      return;
+    }
+
+    temperature = (float)temp; 
+    humidity = (float)hum; 
+
+    SerialBT.printf("dhtTemp : %.2f\n", temperature);
+    SerialBT.printf("dhtHum : %.2f\n", humidity);
+
+    Serial.printf("Sent Temperature: %.2f\n", temperature);
+    Serial.printf("Sent Humidity: %.2f\n", humidity);
+  }
+}
+void TaskBlue(void *pvParameters) {
+  for (;;) {
+    handleBluetoothCommunication(); 
+    handleSerialCommunication(); 
+    sendDHTValues();
+  }
 }
