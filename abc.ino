@@ -34,7 +34,7 @@ char incomingChar;
 float temperature = 0; 
 float humidity = 0; 
 unsigned long previousMillis = 0; 
-const long interval = 15000; 
+const long interval = 2000; 
 
 bool shouldSaveConfig = false;
 WiFiManager wm;
@@ -137,6 +137,15 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED && ethConnectRetry<2 ) {
         Serial.println("WiFi disconnected, connecting to Ethernet...");
         connectEthernet();
+        // xTaskCreatePinnedToCore(
+        //   TaskBlue,
+        //   "Blue Task",
+        //   4084 ,
+        //   NULL,
+        //   1,
+        //   &firebase_task_handle_blue,
+        //   ARDUINO_RUNNING_CORE
+        // );
         ethConnectRetry++;
     }
     delay(10);
@@ -267,6 +276,7 @@ void configModeCallback(WiFiManager* myWiFiManager) {
       Serial.println(Ethernet.localIP());
       ethConnectRetry++;
     }
+    
 }
 
 void setupWiFi() {
