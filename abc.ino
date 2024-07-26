@@ -40,7 +40,7 @@ bool shouldSaveConfig = false;
 WiFiManager wm;
 WebServer server(80);
 
-const char* mqtt_server = "mqtt.eclipseprojects.io";
+const char* mqtt_server = "broker.emqx.io";
 const char* mqtt_username = "";
 const char* mqtt_password = "";
 const int mqtt_port = 1883;
