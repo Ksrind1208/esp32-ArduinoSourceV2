@@ -15,6 +15,7 @@
 #include <BluetoothSerial.h> 
 #include <HardwareSerial.h>
 #include <TaskScheduler.h>
+#include <ESP32Time.h>
 #define ESP_DRD_USE_SPIFFS true
 
 #define JSON_CONFIG_FILE "/test_config.json"
@@ -33,7 +34,8 @@ char incomingChar;
 
 float temperature = 0; 
 float humidity = 0; 
-unsigned long previousMillis = 0; 
+unsigned long previousMillisDHT = 0;
+unsigned long previousMillisRTC = 0;  
 const long interval = 2000; 
 
 bool shouldSaveConfig = false;
@@ -57,6 +59,7 @@ PubSubClient client;
 
 const char* led_Topic = "/topic/qos0";
 const char* temp_humid_Topic = "home/sensor/TemperatureandHumid";
+const char* reboot_Topic="reboot";
 
 #define MSG_BUFFER_SIZE (50)
 char msg[MSG_BUFFER_SIZE];
@@ -64,18 +67,23 @@ char msg[MSG_BUFFER_SIZE];
 static const char* root_ca PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
-...
+...=
 -----END CERTIFICATE-----
 )EOF";
 
-DHT dht(4, DHT11);
-const int led_pin = 2;
+DHT dht(13, DHT11);
+const int led_pin1 = 14;
+const int led_pin2 = 27;
+const int led_pin3 = 26;
 
 bool isEthernetConnected = false;
 
 void TaskBlue(void *pvParameters);
+void TaskRTC(void *pvParameters);
 
 TaskHandle_t firebase_task_handle_blue;
+
+ESP32Time rtc(3600);
 
 void macCharArrayToBytes(const char* str, byte* bytes) {
     for (int i = 0; i < 6; i++) {
@@ -97,6 +105,8 @@ void connectEthernet() {
     Serial.print("Ethernet IP is: ");
     Serial.println(Ethernet.localIP());
     client.setClient(ethClient);
+    client.setKeepAlive(1); 
+    ethClient.setTimeout(1000); 
     client.setServer(mqtt_server, mqtt_port);
     client.setCallback(callback);
     connectMQTT();
@@ -106,6 +116,7 @@ void connectEthernet() {
 
 void setup() {
     Serial.begin(115200);
+    rtc.setTime(30, 40, 21, 26, 7, 2024);
     SerialBT.begin("12325r2535353464"); 
     Serial.println("The device started, now you can pair it with Bluetooth!"); 
     xTaskCreatePinnedToCore(
@@ -117,13 +128,28 @@ void setup() {
     &firebase_task_handle_blue,
     ARDUINO_RUNNING_CORE
   );
+    xTaskCreatePinnedToCore(
+    TaskRTC,
+    "RTC Task",
+    4084 ,
+    NULL,
+    1,
+    &firebase_task_handle_blue,
+    ARDUINO_RUNNING_CORE
+  );
     dht.begin();
-    pinMode(led_pin, OUTPUT);
+
+    pinMode(led_pin1, OUTPUT);
+    pinMode(led_pin2, OUTPUT);
+    pinMode(led_pin3, OUTPUT);
+
     delay(2000);
     setupWiFi();
     delay(300);
     if(WiFi.status() == WL_CONNECTED){
       client.setClient(wifiClient);
+      client.setKeepAlive(1); 
+      wifiClient.setTimeout(1000); 
       client.setServer(mqtt_server, mqtt_port);
       client.setCallback(callback);
       connectMQTT();
@@ -183,6 +209,8 @@ void connectMQTT() {
             Serial.println("connected");
             client.subscribe(led_Topic);
             client.subscribe(temp_humid_Topic);
+            client.subscribe(reboot_Topic);
+            delay(1500);
             client.publish("lastWillTopic","Online");
         } else {
             Serial.print("failed, rc=");
@@ -200,16 +228,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
     if (strcmp(topic, led_Topic) == 0) {
         if (incommingMessage.equals("ON")) {
-            digitalWrite(led_pin, 1);
+            digitalWrite(led_pin1, 1);
+            digitalWrite(led_pin2, 1);
+            digitalWrite(led_pin3, 1);
+
         }
         if (incommingMessage.equals("OFF")) {
-            digitalWrite(led_pin, 0);
+            digitalWrite(led_pin1, 0);
+            digitalWrite(led_pin2, 0);
+            digitalWrite(led_pin3, 0);
         }
     }
-    if (strcmp(topic, temp_humid_Topic) == 0) {
-        if (incommingMessage.equals("Closethedoor")) {
-            Serial.println("Closethedoor");
-        }
+    if (strcmp(topic, reboot_Topic) == 0) {
+      ESP.restart();
     }
 }
 
@@ -304,10 +335,14 @@ void setupWiFi() {
 // Ble
 void processMessage(String msg) {
   if (msg == "led_on") {
-    digitalWrite(led_pin, HIGH);
+    digitalWrite(led_pin1, HIGH);
+    digitalWrite(led_pin2, HIGH);
+    digitalWrite(led_pin3, HIGH);
     SerialBT.println("LED is ON");
   } else if (msg == "led_off") {
-    digitalWrite(led_pin, LOW); 
+    digitalWrite(led_pin1, LOW);
+    digitalWrite(led_pin2, LOW);
+    digitalWrite(led_pin3, LOW);
     SerialBT.println("LED is OFF"); 
   } 
   else if (msg.startsWith("dhtTemp : ")) {
@@ -358,8 +393,8 @@ void handleSerialCommunication() {
 
 void sendDHTValues() {
   unsigned long currentMillis = millis(); 
-  if (currentMillis - previousMillis >= interval) { 
-    previousMillis = currentMillis; 
+  if (currentMillis - previousMillisDHT >= interval) { 
+    previousMillisDHT = currentMillis; 
 
     float temp = dht.readTemperature();
     float hum = dht.readHumidity();
@@ -377,6 +412,16 @@ void sendDHTValues() {
 
     Serial.printf("Sent Temperature: %.2f\n", temperature);
     Serial.printf("Sent Humidity: %.2f\n", humidity);
+
+  }
+}
+void rtcShow() {
+  unsigned long currentMillis = millis(); 
+  if (currentMillis - previousMillisRTC >= interval) { 
+    previousMillisRTC = currentMillis; 
+
+    Serial.println(rtc.getTime("%A, %B %d %Y %H:%M:%S"));  
+    struct tm timeinfo = rtc.getTimeStruct();
   }
 }
 void TaskBlue(void *pvParameters) {
@@ -384,5 +429,10 @@ void TaskBlue(void *pvParameters) {
     handleBluetoothCommunication(); 
     handleSerialCommunication(); 
     sendDHTValues();
+  }
+}
+void TaskRTC(void *pvParameters) {
+  for (;;) {
+    rtcShow();
   }
 }
