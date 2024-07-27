@@ -176,7 +176,7 @@ void loop() {
     }
     delay(10);
     if (WiFi.status() == WL_CONNECTED || Ethernet.linkStatus() == LinkON) {
-    client.loop();
+      client.loop();
     }
     delay(10);
     unsigned long now = millis();
@@ -301,10 +301,10 @@ void configModeCallback(WiFiManager* myWiFiManager) {
       byte* mac = new byte[6];
       macCharArrayToBytes(ETHERNET_MAC, mac);
       Ethernet.init(ETHERNET_CS_PIN);
-      Ethernet.begin(mac);
+      // Ethernet.begin(mac);
       delay(1000);
-      Serial.print("Ethernet IP is: ");
-      Serial.println(Ethernet.localIP());
+      // Serial.print("Ethernet IP is: ");
+      // Serial.println(Ethernet.localIP());
       ethConnectRetry++;
     }
     
@@ -344,6 +344,8 @@ void processMessage(String msg) {
     digitalWrite(led_pin2, LOW);
     digitalWrite(led_pin3, LOW);
     SerialBT.println("LED is OFF"); 
+  }else if (msg=="reboot"){
+    ESP.restart();
   } 
   else if (msg.startsWith("dhtTemp : ")) {
     String tempValue = msg.substring(10); 
